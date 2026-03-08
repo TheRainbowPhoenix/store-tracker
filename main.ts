@@ -67,6 +67,56 @@ async function addRating(appId: string, newRating: number) {
 // 1. Health/Root Route
 app.get("/", (c) => c.text("ClassPadDev !! [ >v<]~ "));
 
+// 6. Get ALL App Stats (Reporting Endpoint)
+app.get("/report-all-stats-please", async (c) => {
+  // Use kv.list to fetch every key that starts with "apps"
+  const iter = kv.list({ prefix: ["apps"] });
+  
+  // We'll use a dictionary object to group the stats by appId
+  const report: Record<string, { 
+    appId: string; 
+    views: number; 
+    downloads: number; 
+    ratingCount: number; 
+    averageScore: number; 
+  }> = {};
+
+  // Loop through all records in the KV database
+  for await (const entry of iter) {
+    const appId = entry.key[1] as string;
+    const statType = entry.key[2] as string;
+
+    // Initialize the app object if we haven't seen it yet in the loop
+    if (!report[appId]) {
+      report[appId] = {
+        appId,
+        views: 0,
+        downloads: 0,
+        ratingCount: 0,
+        averageScore: 0
+      };
+    }
+
+    // Populate the correct stat based on the key type
+    if (statType === "views" || statType === "downloads") {
+      report[appId][statType] = Number((entry.value as Deno.KvU64).value);
+    } else if (statType === "ratingCount") {
+      report[appId].ratingCount = entry.value as number;
+    } else if (statType === "averageScore") {
+      // Round the average to 1 decimal place while we process it
+      report[appId].averageScore = Math.round((entry.value as number) * 10) / 10;
+    }
+  }
+
+  // Convert the dictionary object into a clean array
+  const allApps = Object.values(report);
+
+  // Optional: Sort the array so the most downloaded apps are at the top!
+  allApps.sort((a, b) => b.downloads - a.downloads);
+
+  return c.json(allApps);
+});
+
 // 2. Track a View (Standard API)
 app.post("/view/:appId", async (c) => {
   const appId = c.req.param("appId");
