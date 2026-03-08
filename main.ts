@@ -1,6 +1,21 @@
 import { Hono } from '@hono/hono';
+import { cors } from '@hono/hono/cors';
 
 const app = new Hono();
+
+// 2. Apply the CORS middleware to all routes ('*')
+app.use(
+  '*',
+  cors({
+    origin: [
+      'https://classpad.dev',
+      'https://store.classpad.dev',
+      'https://classpaddev.github.io',
+    ],
+    allowMethods: ['GET', 'POST', 'OPTIONS'], // Explicitly allow the methods you use
+  })
+);
+
 // Open the KV store. On Deno Deploy, this automatically connects to your managed KV instance.
 const kv = await Deno.openKv();
 
@@ -21,21 +36,41 @@ async function bumpStat(appId: string, statType: "views" | "downloads") {
 // 1. Health/Root Route
 app.get("/", (c) => c.text("ClassPadDev !! [ >v<]~ "));
 
-// 2. Track a View
+// 2. Track a View (Standard API)
 app.post("/view/:appId", async (c) => {
   const appId = c.req.param("appId");
   await bumpStat(appId, "views");
   return c.json({ success: true, message: `View incremented for ${appId}` });
 });
 
-// 3. Track a Download
+// 3. Track a View (Tracking Pixel)
+app.get("/pixel/view/:appId", async (c) => {
+  const appId = c.req.param("appId");
+  
+  // Bump the stat
+  await bumpStat(appId, "views");
+  
+  // Create a microscopic 1x1 transparent SVG
+  const transparentSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
+  
+  // CRITICAL: Force the browser NOT to cache this image
+  c.header('Content-Type', 'image/svg+xml');
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  c.header('Pragma', 'no-cache');
+  c.header('Expires', '0');
+
+  // Return the SVG
+  return c.body(transparentSvg);
+});
+
+// 4. Track a Download
 app.post("/download/:appId", async (c) => {
   const appId = c.req.param("appId");
   await bumpStat(appId, "downloads");
   return c.json({ success: true, message: `Download incremented for ${appId}` });
 });
 
-// 4. Get Stats
+// 5. Get Stats
 app.get("/stats/:appId", async (c) => {
   const appId = c.req.param("appId");
   
