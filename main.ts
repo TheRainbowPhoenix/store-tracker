@@ -33,6 +33,37 @@ async function bumpStat(appId: string, statType: "views" | "downloads") {
     .commit();
 }
 
+
+// Helper to safely add a rating and calculate the new average
+async function addRating(appId: string, newRating: number) {
+  const countKey = ["apps", appId, "ratingCount"];
+  const avgKey = ["apps", appId, "averageScore"];
+
+  let success = false;
+
+  // Loop until the transaction succeeds without race conditions
+  while (!success) {
+    const [countEntry, avgEntry] = await kv.getMany<[number, number]>([countKey, avgKey]);
+    
+    const currentCount = countEntry.value || 0;
+    const currentAvg = avgEntry.value || 0;
+
+    const newCount = currentCount + 1;
+    // Calculate new average: ((Old Average * Old Count) + New Rating) / New Count
+    const newAvg = ((currentAvg * currentCount) + newRating) / newCount;
+
+    // Try to commit the new values, but ONLY if the versions haven't changed
+    const res = await kv.atomic()
+      .check(countEntry) 
+      .check(avgEntry)
+      .set(countKey, newCount)
+      .set(avgKey, newAvg)
+      .commit();
+
+    success = res.ok; 
+  }
+}
+
 // 1. Health/Root Route
 app.get("/", (c) => c.text("ClassPadDev !! [ >v<]~ "));
 
@@ -90,24 +121,52 @@ app.post("/download/:appId", async (c) => {
   return c.json({ success: true, message: `Download incremented for ${appId}` });
 });
 
+app.post("/rate/:appId", async (c) => {
+  const appId = c.req.param("appId");
+  
+  try {
+    const body = await c.req.json();
+    const rating = body.rating;
+
+    // Validate that the rating is an integer between 1 and 5
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return c.json({ error: "Rating must be an integer between 1 and 5" }, 400);
+    }
+
+    await addRating(appId, rating);
+    return c.json({ success: true, message: `Rating of ${rating} added for ${appId}` });
+
+  } catch (e) {
+    return c.json({ error: "Invalid JSON body. Expected { \"rating\": 5 }" }, 400);
+  }
+});
+
 // 5. Get Stats
 app.get("/stats/:appId", async (c) => {
   const appId = c.req.param("appId");
   
-  // Fetch both keys at the exact same time for efficiency
-  const [viewsEntry, downloadsEntry] = await kv.getMany<[Deno.KvU64, Deno.KvU64]>([
+  // Fetch all four keys at once
+  const [viewsEntry, downloadsEntry, countEntry, avgEntry] = await kv.getMany([
     ["apps", appId, "views"],
-    ["apps", appId, "downloads"]
+    ["apps", appId, "downloads"],
+    ["apps", appId, "ratingCount"],
+    ["apps", appId, "averageScore"]
   ]);
 
-  // Extract the BigInt values and convert them to standard numbers
-  const views = viewsEntry.value ? Number(viewsEntry.value.value) : 0;
-  const downloads = downloadsEntry.value ? Number(downloadsEntry.value.value) : 0;
+  const views = viewsEntry.value ? Number((viewsEntry.value as Deno.KvU64).value) : 0;
+  const downloads = downloadsEntry.value ? Number((downloadsEntry.value as Deno.KvU64).value) : 0;
+  const ratingCount = (countEntry.value as number) || 0;
+  
+  // Round the average to 1 decimal place (e.g., 4.3) for cleaner UI
+  const rawAvg = (avgEntry.value as number) || 0;
+  const averageScore = Math.round(rawAvg * 10) / 10; 
 
   return c.json({
     appId,
     views,
-    downloads
+    downloads,
+    ratingCount,
+    averageScore
   });
 });
 
