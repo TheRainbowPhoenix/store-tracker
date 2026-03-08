@@ -1,58 +1,60 @@
-import { PrismaClient } from "./generated/prisma/client.ts";
+import { Hono } from '@hono/hono';
 
-const prisma = new PrismaClient();
+const app = new Hono();
+// Open the KV store. On Deno Deploy, this automatically connects to your managed KV instance.
+const kv = await Deno.openKv();
 
-Deno.serve(async (req: Request) => {
-  const url = new URL(req.url);
-  const pathParts = url.pathname.split("/").filter(Boolean);
+// Helper to increment a stat safely using atomic operations
+async function bumpStat(appId: string, statType: "views" | "downloads") {
+  const key = ["apps", appId, statType];
+  
+  // Deno KV requires Deno.KvU64 for sum operations
+  await kv.atomic()
+    .mutate({
+      type: "sum",
+      key: key,
+      value: new Deno.KvU64(1n), 
+    })
+    .commit();
+}
 
-  // Health check route
-  if (req.method === "GET" && pathParts.length === 0) {
-    return new Response("App Tracker API is running!", { status: 200 });
-  }
+// 1. Health/Root Route
+app.get("/", (c) => c.text("ClassPadDev !! [ >v<]~ "));
 
-  // Handle POST /view/:appId
-  if (req.method === "POST" && pathParts[0] === "view" && pathParts[1]) {
-    const appId = pathParts[1];
-    try {
-      const stats = await prisma.appStats.upsert({
-        where: { appId },
-        update: { views: { increment: 1 } },
-        create: { appId, views: 1, downloads: 0 },
-      });
-      return Response.json({ success: true, stats });
-    } catch (error) {
-      console.error(error);
-      return Response.json({ error: "Database error" }, { status: 500 });
-    }
-  }
-
-  // Handle POST /download/:appId
-  if (req.method === "POST" && pathParts[0] === "download" && pathParts[1]) {
-    const appId = pathParts[1];
-    try {
-      const stats = await prisma.appStats.upsert({
-        where: { appId },
-        update: { downloads: { increment: 1 } },
-        create: { appId, views: 0, downloads: 1 },
-      });
-      return Response.json({ success: true, stats });
-    } catch (error) {
-      console.error(error);
-      return Response.json({ error: "Database error" }, { status: 500 });
-    }
-  }
-
-  // Handle GET /stats/:appId
-  if (req.method === "GET" && pathParts[0] === "stats" && pathParts[1]) {
-    const appId = pathParts[1];
-    const stats = await prisma.appStats.findUnique({ where: { appId } });
-    
-    if (!stats) {
-      return Response.json({ error: "App not found" }, { status: 404 });
-    }
-    return Response.json(stats);
-  }
-
-  return new Response("Not found", { status: 404 });
+// 2. Track a View
+app.post("/view/:appId", async (c) => {
+  const appId = c.req.param("appId");
+  await bumpStat(appId, "views");
+  return c.json({ success: true, message: `View incremented for ${appId}` });
 });
+
+// 3. Track a Download
+app.post("/download/:appId", async (c) => {
+  const appId = c.req.param("appId");
+  await bumpStat(appId, "downloads");
+  return c.json({ success: true, message: `Download incremented for ${appId}` });
+});
+
+// 4. Get Stats
+app.get("/stats/:appId", async (c) => {
+  const appId = c.req.param("appId");
+  
+  // Fetch both keys at the exact same time for efficiency
+  const [viewsEntry, downloadsEntry] = await kv.getMany<[Deno.KvU64, Deno.KvU64]>([
+    ["apps", appId, "views"],
+    ["apps", appId, "downloads"]
+  ]);
+
+  // Extract the BigInt values and convert them to standard numbers
+  const views = viewsEntry.value ? Number(viewsEntry.value.value) : 0;
+  const downloads = downloadsEntry.value ? Number(downloadsEntry.value.value) : 0;
+
+  return c.json({
+    appId,
+    views,
+    downloads
+  });
+});
+
+// Using the official Deno approach you found in the docs!
+Deno.serve(app.fetch);
