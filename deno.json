@@ -1,0 +1,17 @@
+{
+  "nodeModulesDir": "auto",
+  "compilerOptions": {
+    "lib": ["deno.window"],
+    "types": ["node"]
+  },
+  "imports": {
+    "@prisma/client": "npm:@prisma/client@^7.0.0",
+    "prisma": "npm:prisma@^7.0.0"
+  },
+  "tasks": {
+    "dev": "deno run -A --env=.env --watch main.ts",
+    "db:init": "deno run -A npm:prisma init",
+    "db:push": "deno run -A npm:prisma db push",
+    "db:generate": "deno run -A npm:prisma generate"
+  }
+}
