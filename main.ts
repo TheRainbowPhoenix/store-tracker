@@ -67,8 +67,17 @@ async function addRating(appId: string, newRating: number) {
 // 1. Health/Root Route
 app.get("/", (c) => c.text("ClassPadDev !! [ >v<]~ "));
 
+let cachedReport: any = null;
+let lastCacheTime = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
+
 // 6. Get ALL App Stats (Reporting Endpoint)
 app.get("/report-all-stats-please", async (c) => {
+  const now = Date.now();
+  if (cachedReport && now - lastCacheTime < CACHE_TTL) {
+    return c.json(cachedReport);
+  }
+
   // Use kv.list to fetch every key that starts with "apps"
   const iter = kv.list({ prefix: ["apps"] });
   
@@ -113,6 +122,10 @@ app.get("/report-all-stats-please", async (c) => {
 
   // Optional: Sort the array so the most downloaded apps are at the top!
   allApps.sort((a, b) => b.downloads - a.downloads);
+
+  // Update the cache
+  cachedReport = allApps;
+  lastCacheTime = now;
 
   return c.json(allApps);
 });
@@ -221,4 +234,4 @@ app.get("/stats/:appId", async (c) => {
 });
 
 // Using the official Deno approach you found in the docs!
-Deno.serve(app.fetch);
+export default app;
